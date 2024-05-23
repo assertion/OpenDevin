@@ -60,3 +60,4 @@ class SessionManager:
                     logger.info(f'Session {sid} and related resource have been removed due to inactivity.')
 
             await asyncio.sleep(self.cleanup_interval)
+
