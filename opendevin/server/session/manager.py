@@ -4,7 +4,7 @@ import time
 from fastapi import WebSocket
 
 from opendevin.core.logger import opendevin_logger as logger
-
+from typing import Optional
 from .session import Session
 
 
@@ -48,13 +48,15 @@ class SessionManager:
             for sid, session in list(self._sessions.items()):
                 # if session inactive for a long time, remove it
                 if (
-                    not session.is_alive
-                    and current_time - session.last_active_ts > self.session_timeout
+                        not session.is_alive
+                        and current_time - session.last_active_ts > self.session_timeout
                 ):
                     session_ids_to_remove.append(sid)
 
             for sid in session_ids_to_remove:
-                del self._sessions[sid]
-                logger.info(f'Session {sid} has been removed due to inactivity.')
+                to_del_session: Optional[Session] = self._sessions.pop(sid, None)
+                if to_del_session is not None:
+                    await to_del_session.close()
+                    logger.info(f'Session {sid} and related resource have been removed due to inactivity.')
 
             await asyncio.sleep(self.cleanup_interval)
