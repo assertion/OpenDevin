@@ -91,13 +91,15 @@ class BrowserEnv:
         # but for integration test scene, the browser may not be ready yet.
         attempts = 0
         while not self.browser_started and attempts < 2:
-            logger.info(f"Browser has not started yet. Attempt {attempts + 1}/2")
+            logger.info(f'Browser has not started yet. Attempt {attempts + 1}/2')
             time.sleep(10)
             self.browser_started = asyncio.run(self.check_alive_async())
             attempts += 1
 
         if not self.browser_started:
-            raise BrowserInitException('Failed to start browser environment after 2 attempts.')
+            raise BrowserInitException(
+                'Failed to start browser environment after 2 attempts.'
+            )
 
         unique_request_id = str(uuid.uuid4())
         self.agent_side.send((unique_request_id, {'action': action_str}))
