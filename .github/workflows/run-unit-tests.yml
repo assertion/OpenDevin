@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - main-ci
     paths-ignore:
       - '**/*.md'
       - 'frontend/**'
