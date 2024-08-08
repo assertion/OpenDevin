@@ -187,7 +187,7 @@ def mock_completion(*args, test_name, **kwargs):
     else:
         mock_response = get_mock_response(test_name, message_str, cur_id)
     if mock_response is None:
-        raise SecretExit('Mock response for prompt is not found')
+        raise SecretExit(f'Mock response for prompt {cur_id} is not found')
     response = completion(**kwargs, mock_response=mock_response)
     return response
 
