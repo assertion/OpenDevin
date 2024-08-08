@@ -82,6 +82,7 @@ class AgentSession:
             event_stream=self.event_stream,
             sid=self.sid,
             plugins=agent.sandbox_plugins,
+            file_store=self.file_store,  # Add this line
         )
         await self.runtime.ainit()
 

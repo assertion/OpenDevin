@@ -390,7 +390,7 @@ async def list_files(request: Request, path: str | None = None):
             content={'error': 'Runtime not yet initialized'},
         )
     runtime: Runtime = request.state.session.agent_session.runtime
-    file_list = await runtime.list_files(path)
+    file_list = await runtime.file_store.list_files(path)
     return file_list
 
 
