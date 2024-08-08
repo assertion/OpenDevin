@@ -51,11 +51,13 @@ class Runtime:
     sid: str
     config: AppConfig
     DEFAULT_ENV_VARS: dict[str, str]
+    file_store: FileStore  # Add this line
 
     def __init__(
         self,
         config: AppConfig,
         event_stream: EventStream,
+        file_store: FileStore,
         sid: str = 'default',
         plugins: list[PluginRequirement] | None = None,
     ):
@@ -66,9 +68,9 @@ class Runtime:
 
         self.config = copy.deepcopy(config)
         self.DEFAULT_ENV_VARS = _default_env_vars(config.sandbox)
+        self.file_store = file_store  # Add this line
         atexit.register(self.close_sync)
         logger.debug(f'Runtime `{sid}` config:\n{self.config}')
-
     async def ainit(self, env_vars: dict[str, str] | None = None) -> None:
         """
         Initialize the runtime (asynchronously).
