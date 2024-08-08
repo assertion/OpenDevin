@@ -57,9 +57,9 @@ class Runtime:
         self,
         config: AppConfig,
         event_stream: EventStream,
+        file_store: FileStore,
         sid: str = 'default',
         plugins: list[PluginRequirement] | None = None,
-        file_store: FileStore,  # Add this line
     ):
         self.sid = sid
         self.event_stream = event_stream

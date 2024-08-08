@@ -393,7 +393,6 @@ async def list_files(request: Request, path: str | None = None):
     file_list = await runtime.file_store.list_files(path)
     return file_list
 
-
 @app.get('/api/select-file')
 async def select_file(file: str, request: Request):
     """Retrieve the content of a specified file.
