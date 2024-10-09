@@ -56,7 +56,9 @@ def validate_final_state(final_state: State | None, test_name: str):
     assert final_state is not None
     assert final_state.agent_state == AgentState.STOPPED
     if not regen:
-        assert final_state.last_error is None
+        assert (
+            final_state.last_error is None
+        ), f'Unexpected error: {final_state.last_error}'
     # number of LLM conversations should be the same as number of prompt/response
     # log files under mock/[runtime]/[agent]/[test_name] folder. If not, it means there are
     # redundant prompt/response log files checked into the repository.

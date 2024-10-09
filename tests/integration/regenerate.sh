@@ -76,6 +76,21 @@ if [ -z "$SANDBOX_BASE_CONTAINER_IMAGE" ]; then
   SANDBOX_BASE_CONTAINER_IMAGE="nikolaik/python-nodejs:python3.12-nodejs22"
 fi
 
+# Build the Docker image for the runtime
+DOCKER_IMAGE_TAG="ghcr.io/assertion/runtime:ae74bd46567f11ea1ade72246b67f71ca3e10e89-nikolaik"
+echo "Building Docker image $DOCKER_IMAGE_TAG..."
+docker build -t "$DOCKER_IMAGE_TAG" containers/runtime/
+
+# Push the Docker image to GitHub Container Registry
+echo "Pushing Docker image $DOCKER_IMAGE_TAG to GitHub Container Registry..."
+docker push "$DOCKER_IMAGE_TAG"
+
+# Verify the image was pushed successfully
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to push Docker image $DOCKER_IMAGE_TAG"
+  exit 1
+fi
+
 MAX_ITERATIONS=20
 echo "TEST_RUNTIME: $TEST_RUNTIME"
 
