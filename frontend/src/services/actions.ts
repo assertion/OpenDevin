@@ -2,10 +2,15 @@ import { addAssistantMessage, addUserMessage } from "#/state/chatSlice";
 import { setCode, setActiveFilepath } from "#/state/codeSlice";
 import { appendInput } from "#/state/commandSlice";
 import { appendJupyterInput } from "#/state/jupyterSlice";
+import {
+  ActionSecurityRisk,
+  appendSecurityAnalyzerInput,
+} from "#/state/securityAnalyzerSlice";
+import { setCurStatusMessage } from "#/state/statusSlice";
 import { setRootTask } from "#/state/taskSlice";
 import store from "#/store";
 import ActionType from "#/types/ActionType";
-import { ActionMessage } from "#/types/Message";
+import { ActionMessage, StatusMessage } from "#/types/Message";
 import { SocketMessage } from "#/types/ResponseType";
 import { handleObservationMessage } from "./observations";
 import { getRootTask } from "./taskService";
@@ -29,7 +34,11 @@ const messageActions = {
   [ActionType.MESSAGE]: (message: ActionMessage) => {
     if (message.source === "user") {
       store.dispatch(
-        addUserMessage({ content: message.args.content, imageUrls: [] }),
+        addUserMessage({
+          content: message.args.content,
+          imageUrls: [],
+          timestamp: message.timestamp,
+        }),
       );
     } else {
       store.dispatch(addAssistantMessage(message.args.content));
@@ -78,7 +87,25 @@ const messageActions = {
   },
 };
 
+function getRiskText(risk: ActionSecurityRisk) {
+  switch (risk) {
+    case ActionSecurityRisk.LOW:
+      return "Low Risk";
+    case ActionSecurityRisk.MEDIUM:
+      return "Medium Risk";
+    case ActionSecurityRisk.HIGH:
+      return "High Risk";
+    case ActionSecurityRisk.UNKNOWN:
+    default:
+      return "Unknown Risk";
+  }
+}
+
 export function handleActionMessage(message: ActionMessage) {
+  if ("args" in message && "security_risk" in message.args) {
+    store.dispatch(appendSecurityAnalyzerInput(message));
+  }
+
   if (
     (message.action === ActionType.RUN ||
       message.action === ActionType.RUN_IPYTHON) &&
@@ -90,13 +117,13 @@ export function handleActionMessage(message: ActionMessage) {
     if (message.args.command) {
       store.dispatch(
         addAssistantMessage(
-          `Running this command now: \n\`\`\`\`bash\n${message.args.command}\n\`\`\`\`\n`,
+          `Running this command now: \n\`\`\`\`bash\n${message.args.command}\n\`\`\`\`\nEstimated security risk: ${getRiskText(message.args.security_risk as unknown as ActionSecurityRisk)}`,
         ),
       );
     } else if (message.args.code) {
       store.dispatch(
         addAssistantMessage(
-          `Running this code now: \n\`\`\`\`python\n${message.args.code}\n\`\`\`\`\n`,
+          `Running this code now: \n\`\`\`\`python\n${message.args.code}\n\`\`\`\`\nEstimated security risk: ${getRiskText(message.args.security_risk as unknown as ActionSecurityRisk)}`,
         ),
       );
     } else {
@@ -112,6 +139,16 @@ export function handleActionMessage(message: ActionMessage) {
   }
 }
 
+export function handleStatusMessage(message: StatusMessage) {
+  const msg = message.status == null ? "" : message.status.trim();
+  store.dispatch(
+    setCurStatusMessage({
+      ...message,
+      status: msg,
+    }),
+  );
+}
+
 export function handleAssistantMessage(data: string | SocketMessage) {
   let socketMessage: SocketMessage;
 
@@ -123,6 +160,8 @@ export function handleAssistantMessage(data: string | SocketMessage) {
 
   if ("action" in socketMessage) {
     handleActionMessage(socketMessage);
+  } else if ("status" in socketMessage) {
+    handleStatusMessage(socketMessage);
   } else {
     handleObservationMessage(socketMessage);
   }

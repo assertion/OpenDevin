@@ -1,16 +1,16 @@
 SHELL=/bin/bash
-# Makefile for OpenDevin project
+# Makefile for OpenHands project
 
 # Variables
-DOCKER_IMAGE = ghcr.io/opendevin/sandbox:main
+BACKEND_HOST ?= "127.0.0.1"
 BACKEND_PORT = 3000
-BACKEND_HOST = "127.0.0.1:$(BACKEND_PORT)"
+BACKEND_HOST_PORT = "$(BACKEND_HOST):$(BACKEND_PORT)"
 FRONTEND_PORT = 3001
 DEFAULT_WORKSPACE_DIR = "./workspace"
 DEFAULT_MODEL = "gpt-4o"
 CONFIG_FILE = config.toml
 PRE_COMMIT_CONFIG_PATH = "./dev_config/python/.pre-commit-config.yaml"
-PYTHON_VERSION = 3.11
+PYTHON_VERSION = 3.12
 
 # ANSI color codes
 GREEN=$(shell tput -Txterm setaf 2)
@@ -23,9 +23,6 @@ RESET=$(shell tput -Txterm sgr0)
 build:
 	@echo "$(GREEN)Building project...$(RESET)"
 	@$(MAKE) -s check-dependencies
-ifeq ($(INSTALL_DOCKER),)
-	@$(MAKE) -s pull-docker-image
-endif
 	@$(MAKE) -s install-python-dependencies
 	@$(MAKE) -s install-frontend-dependencies
 	@$(MAKE) -s install-pre-commit-hooks
@@ -124,11 +121,6 @@ check-poetry:
 		exit 1; \
 	fi
 
-pull-docker-image:
-	@echo "$(YELLOW)Pulling Docker image...$(RESET)"
-	@docker pull $(DOCKER_IMAGE)
-	@echo "$(GREEN)Docker image pulled successfully.$(RESET)"
-
 install-python-dependencies:
 	@echo "$(GREEN)Installing Python dependencies...$(RESET)"
 	@if [ -z "${TZ}" ]; then \
@@ -174,7 +166,7 @@ install-pre-commit-hooks:
 
 lint-backend:
 	@echo "$(YELLOW)Running linters...$(RESET)"
-	@poetry run pre-commit run --files opendevin/**/* agenthub/**/* evaluation/**/* --show-diff-on-failure --config $(PRE_COMMIT_CONFIG_PATH)
+	@poetry run pre-commit run --files openhands/**/* agenthub/**/* evaluation/**/* --show-diff-on-failure --config $(PRE_COMMIT_CONFIG_PATH)
 
 lint-frontend:
 	@echo "$(YELLOW)Running linters for frontend...$(RESET)"
@@ -198,12 +190,12 @@ build-frontend:
 # Start backend
 start-backend:
 	@echo "$(YELLOW)Starting backend...$(RESET)"
-	@poetry run uvicorn opendevin.server.listen:app --port $(BACKEND_PORT) --reload --reload-exclude "workspace/*"
+	@poetry run uvicorn openhands.server.listen:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --reload --reload-exclude "$(shell pwd)/workspace"
 
 # Start frontend
 start-frontend:
 	@echo "$(YELLOW)Starting frontend...$(RESET)"
-	@cd frontend && VITE_BACKEND_HOST=$(BACKEND_HOST) VITE_FRONTEND_PORT=$(FRONTEND_PORT) npm run start
+	@cd frontend && VITE_BACKEND_HOST=$(BACKEND_HOST_PORT) VITE_FRONTEND_PORT=$(FRONTEND_PORT) npm run start
 
 # Common setup for running the app (non-callable)
 _run_setup:
@@ -213,7 +205,7 @@ _run_setup:
 	fi
 	@mkdir -p logs
 	@echo "$(YELLOW)Starting backend server...$(RESET)"
-	@poetry run uvicorn opendevin.server.listen:app --port $(BACKEND_PORT) &
+	@poetry run uvicorn openhands.server.listen:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) &
 	@echo "$(YELLOW)Waiting for the backend to start...$(RESET)"
 	@until nc -z localhost $(BACKEND_PORT); do sleep 0.1; done
 	@echo "$(GREEN)Backend started successfully.$(RESET)"
@@ -224,6 +216,20 @@ run:
 	@$(MAKE) -s _run_setup
 	@cd frontend && echo "$(BLUE)Starting frontend with npm...$(RESET)" && npm run start -- --port $(FRONTEND_PORT)
 	@echo "$(GREEN)Application started successfully.$(RESET)"
+
+# Run the app (in docker)
+docker-run: WORKSPACE_BASE ?= $(PWD)/workspace
+docker-run:
+	@if [ -f /.dockerenv ]; then \
+		echo "Running inside a Docker container. Exiting..."; \
+		exit 0; \
+	else \
+		echo "$(YELLOW)Running the app in Docker $(OPTIONS)...$(RESET)"; \
+		export WORKSPACE_BASE=${WORKSPACE_BASE}; \
+		export SANDBOX_USER_ID=$(shell id -u); \
+		export DATE=$(shell date +%Y%m%d%H%M%S); \
+		docker compose up $(OPTIONS); \
+	fi
 
 # Run the app (WSL mode)
 run-wsl:
@@ -245,16 +251,6 @@ setup-config-prompts:
 	@read -p "Enter your workspace directory (as absolute path) [default: $(DEFAULT_WORKSPACE_DIR)]: " workspace_dir; \
 	 workspace_dir=$${workspace_dir:-$(DEFAULT_WORKSPACE_DIR)}; \
 	 echo "workspace_base=\"$$workspace_dir\"" >> $(CONFIG_FILE).tmp
-
-	@read -p "Do you want to persist the sandbox container? [true/false] [default: false]: " persist_sandbox; \
-	 persist_sandbox=$${persist_sandbox:-false}; \
-	 if [ "$$persist_sandbox" = "true" ]; then \
-		 read -p "Enter a password for the sandbox container: " ssh_password; \
-		 echo "ssh_password=\"$$ssh_password\"" >> $(CONFIG_FILE).tmp; \
-		 echo "persist_sandbox=$$persist_sandbox" >> $(CONFIG_FILE).tmp; \
-	 else \
-		echo "persist_sandbox=$$persist_sandbox" >> $(CONFIG_FILE).tmp; \
-	 fi
 
 	@echo "" >> $(CONFIG_FILE).tmp
 
@@ -279,6 +275,10 @@ setup-config-prompts:
 		echo "    - nomic-embed-text"; \
 		echo "    - all-minilm"; \
 		echo "    - stable-code"; \
+		echo "    - bge-m3"; \
+		echo "    - bge-large"; \
+		echo "    - paraphrase-multilingual"; \
+		echo "    - snowflake-arctic-embed"; \
 		echo "  - Leave blank to default to 'BAAI/bge-small-en-v1.5' via huggingface"; \
 		read -p "> " llm_embedding_model; \
 		echo "embedding_model=\"$$llm_embedding_model\"" >> $(CONFIG_FILE).tmp; \
@@ -295,10 +295,20 @@ setup-config-prompts:
 		fi
 
 
+# Develop in container
+docker-dev:
+	@if [ -f /.dockerenv ]; then \
+		echo "Running inside a Docker container. Exiting..."; \
+		exit 0; \
+	else \
+		echo "$(YELLOW)Build and run in Docker $(OPTIONS)...$(RESET)"; \
+		./containers/dev/dev.sh $(OPTIONS); \
+	fi
+
 # Clean up all caches
 clean:
 	@echo "$(YELLOW)Cleaning up caches...$(RESET)"
-	@rm -rf opendevin/.cache
+	@rm -rf openhands/.cache
 	@echo "$(GREEN)Caches cleaned up successfully.$(RESET)"
 
 # Help
@@ -307,13 +317,16 @@ help:
 	@echo "Targets:"
 	@echo "  $(GREEN)build$(RESET)               - Build project, including environment setup and dependencies."
 	@echo "  $(GREEN)lint$(RESET)                - Run linters on the project."
-	@echo "  $(GREEN)setup-config$(RESET)        - Setup the configuration for OpenDevin by providing LLM API key,"
+	@echo "  $(GREEN)setup-config$(RESET)        - Setup the configuration for OpenHands by providing LLM API key,"
 	@echo "                        LLM Model name, and workspace directory."
-	@echo "  $(GREEN)start-backend$(RESET)       - Start the backend server for the OpenDevin project."
-	@echo "  $(GREEN)start-frontend$(RESET)      - Start the frontend server for the OpenDevin project."
-	@echo "  $(GREEN)run$(RESET)                 - Run the OpenDevin application, starting both backend and frontend servers."
+	@echo "  $(GREEN)start-backend$(RESET)       - Start the backend server for the OpenHands project."
+	@echo "  $(GREEN)start-frontend$(RESET)      - Start the frontend server for the OpenHands project."
+	@echo "  $(GREEN)run$(RESET)                 - Run the OpenHands application, starting both backend and frontend servers."
 	@echo "                        Backend Log file will be stored in the 'logs' directory."
+	@echo "  $(GREEN)docker-dev$(RESET)          - Build and run the OpenHands application in Docker."
+	@echo "  $(GREEN)docker-run$(RESET)          - Run the OpenHands application, starting both backend and frontend servers in Docker."
 	@echo "  $(GREEN)help$(RESET)                - Display this help message, providing information on available targets."
 
 # Phony targets
-.PHONY: build check-dependencies check-python check-npm check-docker check-poetry pull-docker-image install-python-dependencies install-frontend-dependencies install-pre-commit-hooks lint start-backend start-frontend run run-wsl setup-config setup-config-prompts help
+.PHONY: build check-dependencies check-python check-npm check-docker check-poetry install-python-dependencies install-frontend-dependencies install-pre-commit-hooks lint start-backend start-frontend run run-wsl setup-config setup-config-prompts help
+.PHONY: docker-dev docker-run

@@ -13,24 +13,27 @@ from evaluation.swe_bench.prompt import CODEACT_SWE_PROMPT
 from evaluation.utils.shared import (
     EvalMetadata,
     EvalOutput,
+    assert_and_raise,
     codeact_user_response,
     make_metadata,
     prepare_dataset,
     reset_logger_for_multiprocessing,
     run_evaluation,
 )
-from opendevin.controller.state.state import State
-from opendevin.core.config import (
+from openhands.controller.state.state import State
+from openhands.core.config import (
     AppConfig,
     SandboxConfig,
     get_llm_config_arg,
-    parse_arguments,
+    get_parser,
 )
-from opendevin.core.logger import opendevin_logger as logger
-from opendevin.core.main import create_runtime, run_controller
-from opendevin.events.action import CmdRunAction
-from opendevin.events.observation import CmdOutputObservation, ErrorObservation
-from opendevin.runtime.runtime import Runtime
+from openhands.core.logger import openhands_logger as logger
+from openhands.core.main import create_runtime, run_controller
+from openhands.events.action import CmdRunAction
+from openhands.events.observation import CmdOutputObservation, ErrorObservation
+from openhands.events.serialization.event import event_to_dict
+from openhands.runtime.runtime import Runtime
+from openhands.runtime.utils.shutdown_listener import sleep_if_should_continue
 
 USE_HINT_TEXT = os.environ.get('USE_HINT_TEXT', 'false').lower() == 'true'
 USE_INSTANCE_IMAGE = os.environ.get('USE_INSTANCE_IMAGE', 'false').lower() == 'true'
@@ -86,6 +89,19 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
     return instruction
 
 
+# TODO: migrate all swe-bench docker to ghcr.io/openhands
+DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'docker.io/xingyaoww/')
+logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
+
+
+def get_instance_docker_image(instance_id: str) -> str:
+    image_name = 'sweb.eval.x86_64.' + instance_id
+    image_name = image_name.replace(
+        '__', '_s_'
+    )  # to comply with docker image naming convention
+    return DOCKER_IMAGE_PREFIX.rstrip('/') + '/' + image_name
+
+
 def get_config(
     instance: pd.Series,
     metadata: EvalMetadata,
@@ -93,24 +109,30 @@ def get_config(
     SWE_BENCH_CONTAINER_IMAGE = 'ghcr.io/opendevin/eval-swe-bench:full-v1.2.1'
     if USE_INSTANCE_IMAGE:
         # We use a different instance image for the each instance of swe-bench eval
-        container_image = 'sweb.eval.x86_64.' + instance['instance_id']
+        base_container_image = get_instance_docker_image(instance['instance_id'])
+        logger.info(
+            f'Using instance container image: {base_container_image}. '
+            f'Please make sure this image exists. '
+            f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
+        )
     else:
-        container_image = SWE_BENCH_CONTAINER_IMAGE
+        base_container_image = SWE_BENCH_CONTAINER_IMAGE
+        logger.info(f'Using swe-bench container image: {base_container_image}')
 
     config = AppConfig(
         default_agent=metadata.agent_class,
-        run_as_devin=False,
-        runtime='eventstream',
+        run_as_openhands=False,
         max_budget_per_task=4,
         max_iterations=metadata.max_iterations,
+        runtime=os.environ.get('RUNTIME', 'eventstream'),
         sandbox=SandboxConfig(
-            container_image=container_image,
+            base_container_image=base_container_image,
             enable_auto_lint=True,
             use_host_network=False,
-            # always make sure we are using the latest source code
-            update_source_code=True,
             # large enough timeout, since some testcases take very long to run
             timeout=300,
+            api_key=os.environ.get('ALLHANDS_API_KEY', None),
+            remote_runtime_api_url=os.environ.get('SANDBOX_REMOTE_RUNTIME_API_URL'),
         ),
         # do not mount workspace
         workspace_base=None,
@@ -120,7 +142,7 @@ def get_config(
     return config
 
 
-async def initialize_runtime(
+def initialize_runtime(
     runtime: Runtime,
     instance: pd.Series,  # this argument is not required
 ):
@@ -138,10 +160,20 @@ async def initialize_runtime(
     action = CmdRunAction(
         command=f"""echo 'export SWE_INSTANCE_ID={instance['instance_id']}' >> ~/.bashrc && echo 'export PIP_CACHE_DIR=~/.cache/pip' >> ~/.bashrc && echo "alias git='git --no-pager'" >> ~/.bashrc"""
     )
+    action.timeout = 600
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+    assert_and_raise(
+        obs.exit_code == 0, f'Failed to export SWE_INSTANCE_ID: {obs.content}'
+    )
+
+    action = CmdRunAction(command="""export USER=$(whoami); echo USER=${USER} """)
+    action.timeout = 600
+    logger.info(action, extra={'msg_type': 'ACTION'})
+    obs = runtime.run_action(action)
+    logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+    assert_and_raise(obs.exit_code == 0, f'Failed to export USER: {obs.content}')
 
     if USE_INSTANCE_IMAGE:
         # inject the init script
@@ -149,12 +181,14 @@ async def initialize_runtime(
 
         # inject the instance info
         action = CmdRunAction(command='mkdir -p /swe_util/eval_data/instances')
+        action.timeout = 600
         logger.info(action, extra={'msg_type': 'ACTION'})
-        obs = await runtime.run_action(action)
+        obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-        assert (
-            obs.exit_code == 0
-        ), f'Failed to create /swe_util/eval_data/instances: {obs.content}'
+        assert_and_raise(
+            obs.exit_code == 0,
+            f'Failed to create /swe_util/eval_data/instances: {obs.content}',
+        )
 
         swe_instance_json_name = 'swe-bench-instance.json'
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -168,65 +202,81 @@ async def initialize_runtime(
                     json.dump([instance], f)
 
             # Copy the file to the desired location
-            await runtime.copy_to(temp_file_path, '/swe_util/eval_data/instances/')
+            runtime.copy_to(temp_file_path, '/swe_util/eval_data/instances/')
 
         # inject the instance swe entry
-        await runtime.copy_to(
+        runtime.copy_to(
             str(os.path.join(script_dir, 'scripts/setup/instance_swe_entry.sh')),
             '/swe_util/',
         )
         action = CmdRunAction(command='cat ~/.bashrc')
+        action.timeout = 600
         logger.info(action, extra={'msg_type': 'ACTION'})
-        obs = await runtime.run_action(action)
+        obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-        assert obs.exit_code == 0
+        assert_and_raise(obs.exit_code == 0, f'Failed to cat ~/.bashrc: {obs.content}')
 
         action = CmdRunAction(command='source ~/.bashrc')
+        action.timeout = 600
         logger.info(action, extra={'msg_type': 'ACTION'})
-        obs = await runtime.run_action(action)
+        obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-        assert obs.exit_code == 0
+        assert_and_raise(
+            obs.exit_code == 0, f'Failed to source ~/.bashrc: {obs.content}'
+        )
 
         action = CmdRunAction(command='source /swe_util/instance_swe_entry.sh')
+        action.timeout = 3600
         logger.info(action, extra={'msg_type': 'ACTION'})
-        obs = await runtime.run_action(action)
+        obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-        assert obs.exit_code == 0
+        assert_and_raise(
+            obs.exit_code == 0,
+            f'Failed to source /swe_util/instance_swe_entry.sh: {obs.content}',
+        )
     else:
         action = CmdRunAction(command='source /swe_util/swe_entry.sh')
+        action.timeout = 1800
         logger.info(action, extra={'msg_type': 'ACTION'})
-        obs = await runtime.run_action(action)
+        obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-        assert (
-            obs.exit_code == 0
-        ), f'Failed to source /swe_util/swe_entry.sh: {obs.content}'
+        assert_and_raise(
+            obs.exit_code == 0,
+            f'Failed to source /swe_util/swe_entry.sh: {obs.content}',
+        )
 
     action = CmdRunAction(command=f'cd /workspace/{workspace_dir_name}')
+    action.timeout = 600
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+    assert_and_raise(
+        obs.exit_code == 0,
+        f'Failed to cd to /workspace/{workspace_dir_name}: {obs.content}',
+    )
 
     action = CmdRunAction(command='git reset --hard')
+    action.timeout = 600
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+    assert_and_raise(obs.exit_code == 0, f'Failed to git reset --hard: {obs.content}')
 
     action = CmdRunAction(
         command='for remote_name in $(git remote); do git remote remove "${remote_name}"; done'
     )
+    action.timeout = 600
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+    assert_and_raise(obs.exit_code == 0, f'Failed to remove git remotes: {obs.content}')
 
     logger.info('-' * 30)
     logger.info('END Runtime Initialization Fn')
     logger.info('-' * 30)
 
 
-async def complete_runtime(
+def complete_runtime(
     runtime: Runtime,
     instance: pd.Series,  # this argument is not required, but it is used to get the workspace_dir_name
 ) -> dict[str, Any]:
@@ -243,22 +293,31 @@ async def complete_runtime(
     workspace_dir_name = _get_swebench_workspace_dir_name(instance)
 
     action = CmdRunAction(command=f'cd /workspace/{workspace_dir_name}')
+    action.timeout = 600
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+    assert_and_raise(
+        obs.exit_code == 0,
+        f'Failed to cd to /workspace/{workspace_dir_name}: {obs.content}',
+    )
 
     action = CmdRunAction(command='git config --global core.pager ""')
+    action.timeout = 600
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+    assert_and_raise(
+        obs.exit_code == 0,
+        f'Failed to git config --global core.pager "": {obs.content}',
+    )
 
     action = CmdRunAction(command='git add -A')
+    action.timeout = 600
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+    assert_and_raise(obs.exit_code == 0, f'Failed to git add -A: {obs.content}')
 
     n_retries = 0
     git_patch = None
@@ -269,7 +328,7 @@ async def complete_runtime(
         )
         action.timeout = 600 + 100 * n_retries
         logger.info(action, extra={'msg_type': 'ACTION'})
-        obs = await runtime.run_action(action)
+        obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
         n_retries += 1
         if isinstance(obs, CmdOutputObservation):
@@ -278,12 +337,12 @@ async def complete_runtime(
                 break
             else:
                 logger.info('Failed to get git diff, retrying...')
-                await asyncio.sleep(10)
+                sleep_if_should_continue(10)
         elif isinstance(obs, ErrorObservation):
             logger.error(f'Error occurred: {obs.content}. Retrying...')
-            await asyncio.sleep(10)
+            sleep_if_should_continue(10)
         else:
-            raise ValueError(f'Unexpected observation type: {type(obs)}')
+            assert_and_raise(False, f'Unexpected observation type: {type(obs)}')
 
     logger.info('-' * 30)
     logger.info('END Runtime Completion Fn')
@@ -291,7 +350,7 @@ async def complete_runtime(
     return {'git_patch': git_patch}
 
 
-async def process_instance(
+def process_instance(
     instance: pd.Series,
     metadata: EvalMetadata,
     reset_logger: bool = True,
@@ -305,26 +364,33 @@ async def process_instance(
     else:
         logger.info(f'Starting evaluation for instance {instance.instance_id}.')
 
-    runtime = await create_runtime(config, sid=instance.instance_id)
-    await initialize_runtime(runtime, instance)
+    runtime = create_runtime(config, sid=instance.instance_id)
+    try:
+        initialize_runtime(runtime, instance)
 
-    instruction = get_instruction(instance, metadata)
+        instruction = get_instruction(instance, metadata)
 
-    # Here's how you can run the agent (similar to the `main` function) and get the final task state
-    state: State | None = await run_controller(
-        config=config,
-        task_str=instruction,
-        runtime=runtime,
-        fake_user_response_fn=AGENT_CLS_TO_FAKE_USER_RESPONSE_FN[metadata.agent_class],
-    )
+        # Here's how you can run the agent (similar to the `main` function) and get the final task state
+        state: State | None = asyncio.run(
+            run_controller(
+                config=config,
+                task_str=instruction,
+                runtime=runtime,
+                fake_user_response_fn=AGENT_CLS_TO_FAKE_USER_RESPONSE_FN[
+                    metadata.agent_class
+                ],
+            )
+        )
 
-    # ======= THIS IS SWE-Bench specific =======
-    # Get git patch
-    return_val = await complete_runtime(runtime, instance)
-    git_patch = return_val['git_patch']
-    logger.info(
-        f'Got git diff for instance {instance.instance_id}:\n--------\n{git_patch}\n--------'
-    )
+        # ======= THIS IS SWE-Bench specific =======
+        # Get git patch
+        return_val = complete_runtime(runtime, instance)
+        git_patch = return_val['git_patch']
+        logger.info(
+            f'Got git diff for instance {instance.instance_id}:\n--------\n{git_patch}\n--------'
+        )
+    finally:
+        runtime.close()
     # ==========================================
 
     # ======= Attempt to evaluate the agent's edits =======
@@ -339,10 +405,7 @@ async def process_instance(
     if state is None:
         raise ValueError('State should not be None.')
 
-    # history is now available as a stream of events, rather than list of pairs of (Action, Observation)
-    # for compatibility with the existing output format, we can remake the pairs here
-    # remove when it becomes unnecessary
-    histories = state.history.compatibility_for_eval_history_pairs()
+    histories = [event_to_dict(event) for event in state.history.get_events()]
     metrics = state.metrics.get() if state.metrics else None
 
     # Save the output
@@ -354,6 +417,7 @@ async def process_instance(
         metadata=metadata,
         history=histories,
         metrics=metrics,
+        llm_completions=state.extra_data.get('llm_completions', []),
         error=state.last_error if state and state.last_error else None,
     )
     return output
@@ -376,12 +440,26 @@ def filter_dataset(dataset: pd.DataFrame, filter_column: str) -> pd.DataFrame:
 
 
 if __name__ == '__main__':
-    args = parse_arguments()
+    parser = get_parser()
+    parser.add_argument(
+        '--dataset',
+        type=str,
+        default='princeton-nlp/SWE-bench',
+        help='data set to evaluate on, either full-test or lite-test',
+    )
+    parser.add_argument(
+        '--split',
+        type=str,
+        default='test',
+        help='split to evaluate on',
+    )
+    args, _ = parser.parse_known_args()
 
     # NOTE: It is preferable to load datasets from huggingface datasets and perform post-processing
-    # so we don't need to manage file uploading to OpenDevin's repo
-    dataset = load_dataset('princeton-nlp/SWE-bench_Lite')
-    swe_bench_tests = filter_dataset(dataset['test'].to_pandas(), 'instance_id')
+    # so we don't need to manage file uploading to OpenHands's repo
+    dataset = load_dataset(args.dataset, split=args.split)
+    logger.info(f'Loaded dataset {args.dataset} with split {args.split}')
+    swe_bench_tests = filter_dataset(dataset.to_pandas(), 'instance_id')
 
     llm_config = None
     if args.llm_config:
@@ -410,8 +488,12 @@ if __name__ == '__main__':
     output_file = os.path.join(metadata.eval_output_dir, 'output.jsonl')
     instances = prepare_dataset(swe_bench_tests, output_file, args.eval_n_limit)
 
-    asyncio.run(
-        run_evaluation(
-            instances, metadata, output_file, args.eval_num_workers, process_instance
-        )
+    if len(instances) > 0 and not isinstance(
+        instances['PASS_TO_PASS'][instances['PASS_TO_PASS'].index[0]], str
+    ):
+        for col in ['PASS_TO_PASS', 'FAIL_TO_PASS']:
+            instances[col] = instances[col].apply(lambda x: str(x))
+
+    run_evaluation(
+        instances, metadata, output_file, args.eval_num_workers, process_instance
     )

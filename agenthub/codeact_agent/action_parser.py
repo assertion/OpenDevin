@@ -1,7 +1,7 @@
 import re
 
-from opendevin.controller.action_parser import ActionParser, ResponseParser
-from opendevin.events.action import (
+from openhands.controller.action_parser import ActionParser, ResponseParser
+from openhands.events.action import (
     Action,
     AgentDelegateAction,
     AgentFinishAction,
@@ -40,6 +40,10 @@ class CodeActResponseParser(ResponseParser):
         if action is None:
             return ''
         for lang in ['bash', 'ipython', 'browse']:
+            # special handling for DeepSeek: it has stop-word bug and returns </execute_ipython instead of </execute_ipython>
+            if f'</execute_{lang}' in action and f'</execute_{lang}>' not in action:
+                action = action.replace(f'</execute_{lang}', f'</execute_{lang}>')
+
             if f'<execute_{lang}>' in action and f'</execute_{lang}>' not in action:
                 action += f'</execute_{lang}>'
         return action

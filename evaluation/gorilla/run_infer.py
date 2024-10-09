@@ -3,6 +3,7 @@ import json
 import os
 
 import pandas as pd
+import requests
 
 from evaluation.gorilla.utils import encode_question, get_data_for_hub
 from evaluation.utils.shared import (
@@ -14,15 +15,15 @@ from evaluation.utils.shared import (
     reset_logger_for_multiprocessing,
     run_evaluation,
 )
-from opendevin.controller.state.state import State
-from opendevin.core.config import (
+from openhands.controller.state.state import State
+from openhands.core.config import (
     AppConfig,
     SandboxConfig,
     get_llm_config_arg,
     get_parser,
 )
-from opendevin.core.logger import opendevin_logger as logger
-from opendevin.core.main import create_runtime, run_controller
+from openhands.core.logger import openhands_logger as logger
+from openhands.core.main import create_runtime, run_controller
 
 AGENT_CLS_TO_FAKE_USER_RESPONSE_FN = {
     'CodeActAgent': codeact_user_response,
@@ -38,14 +39,13 @@ def get_config(
 ) -> AppConfig:
     config = AppConfig(
         default_agent=metadata.agent_class,
-        run_as_devin=False,
+        run_as_openhands=False,
         runtime='eventstream',
         max_iterations=metadata.max_iterations,
         sandbox=SandboxConfig(
-            container_image='ubuntu:22.04',
+            base_container_image='python:3.12-bookworm',
             enable_auto_lint=True,
             use_host_network=False,
-            update_source_code=True,
         ),
         # do not mount workspace
         workspace_base=None,
@@ -55,7 +55,7 @@ def get_config(
     return config
 
 
-async def process_instance(
+def process_instance(
     instance: pd.Series,
     metadata: EvalMetadata,
     reset_logger: bool = True,
@@ -79,14 +79,16 @@ async def process_instance(
     # logger.info(f'Instruction:\n{instruction}', extra={'msg_type': 'OBSERVATION'})
 
     # Here's how you can run the agent (similar to the `main` function) and get the final task state
-    runtime = await create_runtime(config, sid=instance_id)
-    state: State | None = await run_controller(
-        config=config,
-        task_str=instruction,
-        runtime=runtime,
-        fake_user_response_fn=AGENT_CLS_TO_FAKE_USER_RESPONSE_FN.get(
-            metadata.agent_class
-        ),
+    runtime = create_runtime(config, sid=instance_id)
+    state: State | None = asyncio.run(
+        run_controller(
+            config=config,
+            task_str=instruction,
+            runtime=runtime,
+            fake_user_response_fn=AGENT_CLS_TO_FAKE_USER_RESPONSE_FN.get(
+                metadata.agent_class
+            ),
+        )
     )
     # ======= Attempt to evaluate the agent's edits =======
     # If you are working on simpler benchmark that only evaluates the final model output (e.g., in a MessageAction)
@@ -169,14 +171,22 @@ if __name__ == '__main__':
         dataset_df, output_file=output_file, eval_n_limit=args.eval_n_limit
     )
 
-    asyncio.run(
-        run_evaluation(
-            dataset=dataset,
-            metadata=metadata,
-            output_file=output_file,
-            num_workers=args.eval_num_workers,
-            process_instance_func=process_instance,
-        )
+    file_path = os.path.join(os.path.dirname(__file__), 'my-languages.so')
+    # Check if the file exists
+    if not os.path.exists(file_path):
+        url = 'https://raw.githubusercontent.com/ShishirPatil/gorilla/main/eval/eval-scripts/codebleu/parser/my-languages.so'
+        response = requests.get(url)
+        with open(file_path, 'wb') as f:
+            f.write(response.content)
+    else:
+        print('File already exists, skipping download.')
+
+    run_evaluation(
+        dataset=dataset,
+        metadata=metadata,
+        output_file=output_file,
+        num_workers=args.eval_num_workers,
+        process_instance_func=process_instance,
     )
 
     # Read the output file and calculate the accuracy
