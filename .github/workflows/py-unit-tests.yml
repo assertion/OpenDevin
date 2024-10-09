@@ -1,6 +1,13 @@
 # Workflow that runs python unit tests
 name: Run Python Unit Tests
 
+- name: Log in to GitHub Container Registry
+  uses: docker/login-action@v2
+  with:
+    registry: ghcr.io
+    username: ${{ github.actor }}
+    password: ${{ secrets.GHCR_PAT }}
+
 # The jobs in this workflow are required, so they must run at all times
 # * Always run on "main"
 # * Always run on PRs
