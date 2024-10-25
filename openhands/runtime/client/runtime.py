@@ -170,6 +170,8 @@ class EventStreamRuntime(Runtime):
                 extra_deps=self.config.sandbox.runtime_extra_deps,
                 force_rebuild=self.config.sandbox.force_rebuild_runtime,
             )
+        logger.debug(f'Using runtime container image: {self.config.sandbox.runtime_container_image}')
+        logger.debug(f'Container name: {self.container_name}')
         self.container = self._init_container(
             sandbox_workspace_dir=self.config.workspace_mount_path_in_sandbox,  # e.g. /workspace
             mount_dir=self.config.workspace_mount_path,  # e.g. /opt/openhands/_test_workspace

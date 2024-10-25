@@ -17,7 +17,7 @@ from openhands.runtime.builder import DockerRuntimeBuilder, RuntimeBuilder
 
 
 def get_runtime_image_repo():
-    return os.getenv('OH_RUNTIME_RUNTIME_IMAGE_REPO', 'ghcr.io/all-hands-ai/runtime')
+    return os.getenv('OH_RUNTIME_RUNTIME_IMAGE_REPO', 'ghcr.io/assertion/runtime')
 
 
 def _put_source_code_to_dir(temp_dir: str):
@@ -232,6 +232,10 @@ def build_runtime_image(
             skip_init=False,
             extra_deps=extra_deps,
         )
+        
+        # Push the image to the registry
+        image = runtime_builder.docker_client.images.get(from_scratch_hash)
+        runtime_builder.docker_client.images.push(runtime_image_repo, tag=from_scratch_hash)
 
     runtime_image_repo, runtime_image_tag = get_runtime_image_repo_and_tag(base_image)
 
