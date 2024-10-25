@@ -10,6 +10,7 @@ services:
       - SANDBOX_RUNTIME_CONTAINER_IMAGE=${SANDBOX_RUNTIME_CONTAINER_IMAGE:-ghcr.io/all-hands-ai/runtime:0.9-nikolaik}
       - SANDBOX_USER_ID=${SANDBOX_USER_ID:-1234}
       - WORKSPACE_MOUNT_PATH=${WORKSPACE_BASE:-$PWD/workspace}
+    mem_limit: ${SANDBOX_MEMORY_LIMIT:-"100g"}  # Added memory limit configuration
     ports:
       - "3000:3000"
     extra_hosts:
