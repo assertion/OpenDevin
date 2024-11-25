@@ -25,7 +25,7 @@ class BuildFromImageType(Enum):
 
 
 def get_runtime_image_repo():
-    return os.getenv('OH_RUNTIME_RUNTIME_IMAGE_REPO', 'ghcr.io/all-hands-ai/runtime')
+    return os.getenv('OH_RUNTIME_RUNTIME_IMAGE_REPO', 'ghcr.io/assertion/runtime:latest')
 
 
 def _generate_dockerfile(
@@ -400,7 +400,7 @@ if __name__ == '__main__':
             )
 
             _runtime_image_repo, runtime_image_source_tag = (
-                runtime_image_hash_name.split(':')
+                runtime_image_hash_name.split(':', 1)
             )
 
             # Move contents of temp_dir to build_folder
