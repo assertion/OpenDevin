@@ -8,7 +8,7 @@ RUN npm install -g npm@10.5.1
 RUN npm ci
 
 COPY ./frontend ./
-RUN npm run make-i18n && npm run build
+RUN npm run build
 
 FROM python:3.12.3-slim AS backend-builder
 
@@ -28,7 +28,7 @@ COPY ./pyproject.toml ./poetry.lock ./
 RUN touch README.md
 RUN export POETRY_CACHE_DIR && poetry install --without evaluation,llama-index --no-root && rm -rf $POETRY_CACHE_DIR
 
-FROM python:3.12.3-slim AS runtime
+FROM python:3.12.3-slim AS openhands-app
 
 WORKDIR /app
 
@@ -41,6 +41,7 @@ ENV SANDBOX_LOCAL_RUNTIME_URL=http://host.docker.internal
 ENV USE_HOST_NETWORK=false
 ENV WORKSPACE_BASE=/opt/workspace_base
 ENV OPENHANDS_BUILD_VERSION=$OPENHANDS_BUILD_VERSION
+ENV SANDBOX_USER_ID=0
 RUN mkdir -p $WORKSPACE_BASE
 
 RUN apt-get update -y \
@@ -82,7 +83,7 @@ RUN python openhands/core/download.py # No-op to download assets
 # openhands:openhands -> openhands:app
 RUN find /app \! -group app -exec chgrp app {} +
 
-COPY --chown=openhands:app --chmod=770 --from=frontend-builder /app/build/client ./frontend/build
+COPY --chown=openhands:app --chmod=770 --from=frontend-builder /app/build ./frontend/build
 COPY --chown=openhands:app --chmod=770 ./containers/app/entrypoint.sh /app/entrypoint.sh
 
 USER root
