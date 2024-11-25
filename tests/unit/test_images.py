@@ -16,5 +16,5 @@ def test_runtime_image_hash_split():
 def test_memory_limit_default():
     # Assuming there's a way to access the memory limit from the config or environment
     # This is a placeholder for the actual implementation
-    mem_limit = "100g"  # This should be fetched from the actual configuration
-    assert mem_limit == "100g"
+    mem_limit = '100g'  # This should be fetched from the actual configuration
+    assert mem_limit == '100g'
