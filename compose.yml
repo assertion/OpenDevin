@@ -8,6 +8,7 @@ services:
     container_name: openhands-app-${DATE:-}
     environment:
       - SANDBOX_RUNTIME_CONTAINER_IMAGE=${SANDBOX_RUNTIME_CONTAINER_IMAGE:-ghcr.io/assertion/runtime:latest}
+      - SANDBOX_IMAGE_TAG=${SANDBOX_RUNTIME_CONTAINER_IMAGE##*:}
       - SANDBOX_USER_ID=${SANDBOX_USER_ID:-1234}
       - WORKSPACE_MOUNT_PATH=${WORKSPACE_BASE:-$PWD/workspace}
     mem_limit: ${SANDBOX_MEMORY_LIMIT:-"100g"}

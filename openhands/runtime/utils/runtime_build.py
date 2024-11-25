@@ -400,7 +400,7 @@ if __name__ == '__main__':
             )
 
             _runtime_image_repo, runtime_image_source_tag = (
-                runtime_image_hash_name.split(':')
+                runtime_image_hash_name.split(':', 1)
             )
 
             # Move contents of temp_dir to build_folder
