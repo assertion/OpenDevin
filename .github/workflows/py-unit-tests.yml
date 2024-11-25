@@ -32,9 +32,8 @@ jobs:
         run: |
           export COMMIT_SHA=${{ github.sha }}
           docker buildx build --push \
-            -t ghcr.io/assertion/runtime:${COMMIT_SHA}-nikolaik \
+            -t ghcr.io/assertion/runtime:latest \
             ./containers/runtime
-  pull_request:
 
 # If triggered by a PR, it will be in the same group. However, each commit on main will be in its own unique group
 concurrency:

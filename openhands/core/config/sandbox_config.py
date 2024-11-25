@@ -38,7 +38,7 @@ class SandboxConfig:
     keep_remote_runtime_alive: bool = True
     api_key: str | None = None
     base_container_image: str = 'nikolaik/python-nodejs:python3.12-nodejs22'  # default to nikolaik/python-nodejs:python3.12-nodejs22 for eventstream runtime
-    runtime_container_image: str | None = None
+    runtime_container_image: str = 'ghcr.io/assertion/runtime:latest'
     user_id: int = os.getuid() if hasattr(os, 'getuid') else 1000
     timeout: int = 120
     enable_auto_lint: bool = (

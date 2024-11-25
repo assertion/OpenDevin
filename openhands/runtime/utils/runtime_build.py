@@ -25,7 +25,7 @@ class BuildFromImageType(Enum):
 
 
 def get_runtime_image_repo():
-    return os.getenv('OH_RUNTIME_RUNTIME_IMAGE_REPO', 'ghcr.io/assertion/runtime')
+    return os.getenv('OH_RUNTIME_RUNTIME_IMAGE_REPO', 'ghcr.io/assertion/runtime:latest')
 
 
 def _generate_dockerfile(
